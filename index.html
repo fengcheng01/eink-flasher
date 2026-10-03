@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>通用墨水屏固件烧录终端V2 | E-Ink Firmware Flasher</title>
+  <title>通用墨水屏固件烧录终端V3 | E-Ink Firmware Flasher</title>
   <meta name="description" content="基于 Web Serial API 的纯本地通用墨水屏固件在线烧录工具，直接读取本地 bin 固件写入 ESP32 设备。">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -762,15 +762,30 @@
   <!-- 核心库：以普通静态脚本方式载入，原生支持 file:/// 本地双击直接打开与离线运行 -->
   <script>
 /* SPDX-License-Identifier: Apache-2.0
- * 中文：完整 RTS 脉冲退出刷写，DTR 保持非下载态。
- * English: Leave the flasher with a complete RTS pulse, keeping DTR out of download mode.
+ * 中文：先走 ROM 软复位命令让 bootloader 退出并启动应用，再用 esptool 硬复位
+ * 时序兜底；任一成功即算复位已发送。
+ * English: First ask the ROM to leave the loader and boot the app, then fall
+ * back to the esptool hard-reset pulse; either success counts as sent.
  */
-async function picoRestartTransport(transport, pause = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+async function picoRestartTransport(esploader, transport, pause = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+  // ROM 命令通道与烧录相同：flashBegin(0,0)+flashFinish(true) 即退出下载模式。
+  // / Same command channel as flashing: flashBegin(0,0)+flashFinish(true) leaves download mode.
+  let softReset = false;
+  try {
+    await esploader.flashBegin(0, 0);
+    await esploader.flashFinish(true);
+    softReset = true;
+  } catch (error) {
+    console.log('soft reset unavailable:', error.message || error);
+  }
+  // 兜底：esptool hard_reset 的 RTS 复位脉冲（DTR 保持非下载态）。
+  // / Fallback: the esptool hard_reset RTS pulse, keeping DTR out of download mode.
   await transport.setDTR(false);
   await transport.setRTS(true);
   await pause(200);
   await transport.setRTS(false);
   await pause(200);
+  return softReset;
 }
 if (typeof module !== "undefined") module.exports = { picoRestartTransport };
 
@@ -1099,20 +1114,19 @@ window.validateCustomResetStringSequence = Qe;
         progressFill.style.width = "100%";
         progressPercent.textContent = "100%";
         progressStatus.textContent = "烧录完成！正在重启设备...";
-        terminal.writeLine("\n✅ 固件烧录成功！正在通过 RTS 脉冲重启设备...");
+        terminal.writeLine("\n✅ 固件烧录成功！正在退出下载模式并重启设备...");
 
         // 重启设备并释放串口 / Reset and release the port.
         let resetSent = false;
         try {
-          await picoRestartTransport(transport);
-          resetSent = true;
+          resetSent = await picoRestartTransport(esploader, transport);
         } catch (err) {
           terminal.writeLine(`复位未确认: ${err.message || err}`);
         }
         try { await transport.disconnect(); } catch (err) { console.log(err); }
         chipInfoBar.style.display = "none";
 
-        alert(resetSent ? "固件写入成功，已发送重启指令。请在设备设置页确认固件版本。" : "固件写入成功，自动重启未确认。请查看日志；无需重新擦除或重复刷写。");
+        alert(resetSent ? "固件写入成功，已发送重启指令。请在设备开机图底部核对固件版本。" : "固件写入成功，软复位未确认但已发送复位脉冲；屏幕无变化时请长按电源键重启，无需重新烧录。");
 
       } catch (err) {
         console.error(err);
