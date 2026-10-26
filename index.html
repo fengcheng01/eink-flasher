@@ -1391,15 +1391,27 @@ any other hardware connected to IOs.`)}catch(e){throw new d(`Unable to verify fl
         if (worker) {
           flashWorker = worker;
           wireWorkerHandlers(worker);
+          try {
+            // 串口移交失败会同步抛出且串口未被移交，此时降级页面线程继续。
+            // / A failed port transfer throws synchronously with the port untouched; degrade to the page thread.
+            worker.postMessage({
+              cmd: "flash",
+              port: port,
+              data: fileBinaryData,
+              offset: offset,
+              baudrate: baudrate,
+              eraseAll: eraseAll
+            }, [port]);
+          } catch (transferErr) {
+            console.warn("port transfer unsupported:", transferErr);
+            try { worker.terminate(); } catch (e) {}
+            flashWorker = null;
+            terminal.writeLine("[提示] 当前浏览器不支持把串口移交给后台线程，已改在页面线程烧录：切到后台可能被浏览器限流暂停，请保持页面前台。");
+            await flashOnMainThread(port, fileBinaryData, offset, baudrate, eraseAll);
+            resetFlashUi();
+            return;
+          }
           terminal.writeLine("[后台] 烧录已移入后台线程：切换标签页或最小化浏览器，写入不会暂停。");
-          worker.postMessage({
-            cmd: "flash",
-            port: port,
-            data: fileBinaryData,
-            offset: offset,
-            baudrate: baudrate,
-            eraseAll: eraseAll
-          }, [port]);
           return;
         }
 
