@@ -68,27 +68,51 @@ self.onmessage = async (event) => {
     }
 
     const hex = Number(msg.offset).toString(16).toUpperCase();
-    post('progress', { pct: 5, status: `写入中 (地址 0x${hex})...` });
-    log(`[烧录] 开始向 0x${hex} 写入固件...`);
-    await loader.writeFlash({
-      fileArray: [{ data: msg.data, address: Number(msg.offset) }],
-      flashSize: 'keep',
-      flashMode: 'keep',
-      flashFreq: 'keep',
-      eraseAll: false,
-      // S31 ROM 不支持压缩写入 / The S31 ROM does not support compressed writes.
-      compress: !isS31,
-      reportProgress: (fileIndex, written, total) => {
-        const pct = total > 0 ? Math.round((written / total) * 100) : 0;
-        post('progress', { pct, status: `写入中: ${(written / 1024).toFixed(1)} / ${(total / 1024).toFixed(1)} KB` });
-      }
-    });
+    // 首选当前协商档位写入；S31 持续写入中断时自动断开并以 115200 从头重写一次
+    // （flashBegin 会先擦除目标区域，对同地址重写安全）。
+    // / First write at the negotiated tier; on a mid-write S31 failure, disconnect
+    // and automatically rewrite once from scratch at 115200 (flashBegin erases the
+    // region first, so rewriting the same address is safe).
+    const writeOnce = (activeLoader, label) => {
+      post('progress', { pct: 5, status: `写入中 (地址 0x${hex})${label}...` });
+      log(`[烧录] 开始向 0x${hex} ${label}写入固件...`);
+      return activeLoader.writeFlash({
+        fileArray: [{ data: msg.data, address: Number(msg.offset) }],
+        flashSize: 'keep',
+        flashMode: 'keep',
+        flashFreq: 'keep',
+        eraseAll: false,
+        // S31 ROM 不支持压缩写入 / The S31 ROM does not support compressed writes.
+        compress: !isS31,
+        reportProgress: (fileIndex, written, total) => {
+          const pct = total > 0 ? Math.round((written / total) * 100) : 0;
+          post('progress', { pct, status: `写入${label}: ${(written / 1024).toFixed(1)} / ${(total / 1024).toFixed(1)} KB` });
+        }
+      });
+    };
+    let writer = loader;
+    try {
+      await writeOnce(writer, '');
+    } catch (writeErr) {
+      if (!isS31) throw writeErr;
+      log(`\n⚠️ 高档位写入中断：${writeErr.message || writeErr}`);
+      log('[回退] 断开设备并改用 115200 波特率从头重写...');
+      post('progress', { pct: 0, status: '高档位写入中断，改用 115200 重写...' });
+      try { await transport.disconnect(); } catch (e) {}
+      await new Promise(resolve => setTimeout(resolve, 250));
+      writer = new ESPLoader({ transport, baudrate: 115200, romBaudrate: 115200, terminal, debugLogging: false });
+      await writer.detectChip();
+      if (!(writer.chip && writer.chip.CHIP_NAME === 'ESP32-S31')) throw writeErr;
+      await prepareS31Rom(writer, transport, log);
+      log('[回退] 已回到 115200，重新开始写入。');
+      await writeOnce(writer, '(115200 回退) ');
+    }
 
     post('progress', { pct: 96, status: '烧录完成！正在重启设备...' });
     log('✅ 固件烧录成功！正在退出下载模式并重启设备...');
     let resetSent = false;
     try {
-      resetSent = await (isS31 ? metalioRestartTransport : picoRestartTransport)(loader, transport);
+      resetSent = await (isS31 ? metalioRestartTransport : picoRestartTransport)(writer, transport);
     } catch (err) {
       log(`复位未确认: ${err.message || err}`);
     }
