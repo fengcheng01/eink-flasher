@@ -1006,10 +1006,11 @@ any other hardware connected to IOs.`)}catch(e){throw new d(`Unable to verify fl
         ? `${sizeMb} MB (${file.size.toLocaleString()} 字节)`
         : `${sizeKb} KB (${file.size.toLocaleString()} 字节)`;
 
-      // 读取文件二进制内容
+      // 以 ArrayBuffer 读取：esptool-js writeFlash 要求 data 为 Uint8Array，不接受字符串。
+      // / Read as ArrayBuffer: esptool-js writeFlash requires Uint8Array data, not strings.
       const reader = new FileReader();
       reader.onload = (ev) => {
-        fileBinaryData = ev.target.result;
+        fileBinaryData = new Uint8Array(ev.target.result);
         terminal.writeLine(`[文件载入] 成功载入: ${file.name} (${file.size.toLocaleString()} 字节)`);
         dropzone.style.display = "none";
         fileCard.style.display = "flex";
@@ -1020,7 +1021,7 @@ any other hardware connected to IOs.`)}catch(e){throw new d(`Unable to verify fl
         alert("读取文件失败，请重新选择！");
         terminal.writeLine(`[错误] 读取固件文件失败`);
       };
-      reader.readAsBinaryString(file);
+      reader.readAsArrayBuffer(file);
     }
 
     fileRemoveBtn.addEventListener("click", () => {
