@@ -986,6 +986,18 @@ any other hardware connected to IOs.`)}catch(e){throw new d(`Unable to verify fl
       }
       terminalBody.scrollTop = terminalBody.scrollHeight;
     }
+    // 按错误形态给出针对性提示。/ Stage-specific hints for common failures.
+    function flashHint(message) {
+      const text = String(message || "");
+      if (/Failed to open serial port|Failed to execute 'open' on 'SerialPort'/.test(text)) {
+        return "\n串口打开失败：端口可能正被其他页面或程序占用。请关闭本页面的其他标签页与窗口，拔插一次设备 USB 再试；Windows 下请同时关闭可能占用串口的串口助手/烧录软件。尚未写入任何固件。";
+      }
+      if (/Failed to connect with the device/.test(text)) {
+        return "\n尚未写入固件。请先关闭占用串口的程序（串口日志、idf.py monitor、其他烧录页面）后重试；仍失败时按设备说明长按 Boot 进入下载模式。";
+      }
+      return "";
+    }
+
     function queueLog(line) {
       logQueue.push(String(line));
       if (!logTimer) logTimer = setTimeout(flushLogs, 80);
@@ -1223,10 +1235,7 @@ any other hardware connected to IOs.`)}catch(e){throw new d(`Unable to verify fl
           flashWorker = null;
           resetFlashUi();
           // 握手失败时还没有写入任何 Flash，提示占用与下载模式。/ A handshake failure wrote nothing; point to port ownership and download mode.
-          const syncHelp = /Failed to connect with the device/.test(msg.message)
-            ? "\n尚未写入固件。请先关闭占用串口的程序（串口日志、idf.py monitor、其他烧录页面）后重试；仍失败时按设备说明长按 Boot 进入下载模式。"
-            : "";
-          alert(`烧录中断或失败: ${msg.message}${syncHelp}\n请检查线缆连接并查看下方控制台日志。`);
+          alert(`烧录中断或失败: ${msg.message}${flashHint(msg.message)}\n请检查线缆连接并查看下方控制台日志。`);
         }
       };
       worker.onerror = (event) => {
@@ -1454,10 +1463,7 @@ any other hardware connected to IOs.`)}catch(e){throw new d(`Unable to verify fl
         terminal.writeLine(`\n❌ 发生错误: ${err.message || err}`);
         progressStatus.textContent = "烧录失败";
         // 握手失败时还没有写入任何 Flash，提示占用与下载模式。/ A handshake failure wrote nothing; point to port ownership and download mode.
-        const syncHelp = /Failed to connect with the device/.test(String(err.message || err))
-          ? "\n尚未写入固件。请先关闭占用串口的程序（串口日志、idf.py monitor、其他烧录页面）后重试；仍失败时按设备说明长按 Boot 进入下载模式。"
-          : "";
-        alert(`烧录中断或失败: ${err.message || err}${syncHelp}\n请检查线缆连接并查看下方控制台日志。`);
+        alert(`烧录中断或失败: ${err.message || err}${flashHint(err.message || err)}\n请检查线缆连接并查看下方控制台日志。`);
         resetFlashUi();
       }
     });
