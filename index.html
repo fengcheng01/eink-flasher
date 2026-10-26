@@ -828,6 +828,44 @@ async function prepareS31Rom(loader, transport, onLog) {
   onLog?.('S31 ROM 准备完成（sync排水 / SPI_ATTACH / SPI_SET_PARAMS / 0x400块）');
 }
 
+// S31 ROM 波特率提升：CHANGE_BAUDRATE 的应答仍在旧波特率上读取，随后主机串口重开
+// 到目标波特率并用 sync 探测（S31 ROM 每个 sync 回多帧，残留由 prepareS31Rom 排干）；
+// 探测失败自动回退 115200。全程不重置芯片、不上传 stub。本机曾用 esptool CLI 在
+// --no-stub 下以 460800 完成写入，故 460800 是已验证档位。
+// / S31 ROM baud bump: CHANGE_BAUDRATE is answered at the old baud, then the host
+// port reopens at the target and one sync probes it (the S31 ROM answers one sync
+// with several frames; leftovers are drained by prepareS31Rom). Failure falls back
+// to 115200. Never resets the chip, never uploads a stub. The esptool CLI
+// --no-stub path already wrote this device at 460800, so it is the proven tier.
+async function changeS31Baud(loader, transport, targetBaud, pause = ms => new Promise(resolve => setTimeout(resolve, ms)), onLog) {
+  const baud = Number(targetBaud) || 115200;
+  if (baud <= 115200) { onLog?.('S31 保持 115200 波特率'); return 115200; }
+  const pkt = new Uint8Array(8);
+  new DataView(pkt.buffer).setUint32(0, baud, true); // 目标波特率 / target baud；低字保持 0（ROM 约定）/ low word 0 per ROM convention
+  await loader.command(loader.ESP_CHANGE_BAUDRATE, pkt);
+  await pause(50);
+  await transport.changeBaudrate(baud, loader.serialOptions || {});
+  await transport.drainInput();
+  for (let attempt = 1; attempt <= 2; ++attempt) {
+    try {
+      await loader.sync();
+      onLog?.(`S31 已切换到 ${baud} 波特率（无 stub ROM 模式）`);
+      return baud;
+    } catch (error) {
+      onLog?.(`sync 探测失败(${attempt}/2)：${error.message || error}`);
+      await transport.drainInput();
+    }
+  }
+  // 尽力回退：仅当 ROM 实际未切换时才可能成功；失败则向调用方抛出。
+  // / Best effort: only reachable when the ROM never actually switched; rethrow on failure.
+  onLog?.(`无法在 ${baud} 下通信，尝试回退 115200；若仍失败请改用 460800 重试。`);
+  await transport.changeBaudrate(115200, loader.serialOptions || {});
+  await transport.drainInput();
+  await loader.sync();
+  onLog?.('已回退 115200 波特率');
+  return 115200;
+}
+
 // S31 ROM 结束写入后先请求重启，再尝试 USB 串口 RTS 脉冲；两者都不宣称已启动应用。
 // 与小纸不同：S31 不走 flashBegin(0,0)，只发 flashFinish(true) 退出下载模式。
 // / Request reboot after an S31 ROM write, then try the USB RTS pulse; neither proves app boot.
@@ -847,7 +885,7 @@ async function metalioRestartTransport(loader, transport, pause = ms => new Prom
     return false;
   }
 }
-if (typeof module !== "undefined") module.exports = { prepareS31Rom, metalioRestartTransport };
+if (typeof module !== "undefined") module.exports = { prepareS31Rom, changeS31Baud, metalioRestartTransport };
 
 (function(){var e=Object.create,t=Object.defineProperty,n=Object.getOwnPropertyDescriptor,r=Object.getOwnPropertyNames,i=Object.getPrototypeOf,a=Object.prototype.hasOwnProperty,o=(e,t,n)=>()=>{if(n)throw n[0];try{return e&&(t=e(e=0)),t}catch(e){throw n=[e],e}},s=(e,t)=>()=>(t||(e((t={exports:{}}).exports,t),e=null),t.exports),c=(e,n)=>{let r={};for(var i in e)t(r,i,{get:e[i],enumerable:!0});return n||t(r,Symbol.toStringTag,{value:`Module`}),r},l=(e,i,o,s)=>{if(i&&typeof i==`object`||typeof i==`function`)for(var c=r(i),l=0,u=c.length,d;l<u;l++)d=c[l],!a.call(e,d)&&d!==o&&t(e,d,{get:(e=>i[e]).bind(null,d),enumerable:!(s=n(i,d))||s.enumerable});return e},u=(n,r,o)=>(o=n==null?{}:e(i(n)),l(r||!n||!n.__esModule||!a.call(n,`default`)?t(o,`default`,{value:n,enumerable:!0}):o,n)),d=class extends Error{constructor(e){super(e),this.name=new.target.name,Object.setPrototypeOf(this,new.target.prototype)}},f=class extends d{constructor(e=`unsupported command error`){super(e)}},p=class extends d{constructor(e){super(`Unexpected chip ID value ${e}. Failed to autodetect chip type.`)}},m=class extends d{constructor(e){super(`Unexpected CHIP magic value 0x${e.toString(16)}. Failed to autodetect chip type.`)}},h=class extends d{constructor(e=`Security info command does not contain chip ID. This is expected for ESP32-S2 which doesn't support chip ID in security info.`){super(e)}}
 /*! pako 2.2.0 https://github.com/nodeca/pako @license (MIT AND Zlib) */
