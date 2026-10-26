@@ -749,7 +749,7 @@
       <strong>使用注意事项：</strong>
       <ol class="guide-list">
         <li><strong>地址选择：</strong>通常从源码编译出的 <code>firmware.bin</code> 属于 App 分区，选择默认的 <code>0x10000</code> 烧录即可；若是打包好的合并完整镜像（含 bootloader 与分区表），请选择 <code>0x0</code>。</li>
-        <li><strong>Metalio（ESP32-S31）：</strong>连接后自动识别并进入 ROM 无 stub 模式，固定 115200 波特率，写入较慢请勿断开。完整镜像选 <code>0x0</code>；保留数据升级选 <code>0x80000</code>，且必须确认设备已运行 PageRest Metalio v1，否则设备无法启动；烧录后若停在下载模式或黑屏，请物理关机再开机。</li>
+        <li><strong>Metalio（ESP32-S31）：</strong>连接后自动识别并进入 ROM 无 stub 模式，按所选波特率自动提速（推荐 921600，失败自动回退），写入期间请勿断开。完整镜像选 <code>0x0</code>；保留数据升级选 <code>0x80000</code>，且必须确认设备已运行 PageRest Metalio v1，否则设备无法启动；烧录后若停在下载模式或黑屏，请物理关机再开机。</li>
         <li><strong>串口进入：</strong>如点击烧录后卡在 <em>Connecting...</em>，请长按墨水屏的 Boot 按键插线，或按住 Boot 键点按一下 Reset 键强制进入下载模式。</li>
         <li><strong>安全与隐私：</strong>固件读取与串口通信均在浏览器端本地完成（基于 Web Serial API），不会将固件上传至任何第三方服务器。</li>
       </ol>
@@ -1135,8 +1135,11 @@ any other hardware connected to IOs.`)}catch(e){throw new d(`Unable to verify fl
         let chip;
         if (isS31) {
           chip = esploader.chip.CHIP_NAME;
+          // 先提波特率再做 ROM 准备，顺序与 esptool CLI --no-stub 一致。
+          // / Raise the baud before ROM prep, matching the esptool CLI --no-stub order.
+          const activeBaud = await changeS31Baud(esploader, transport, baudrate, ms => new Promise(resolve => setTimeout(resolve, ms)), (line) => terminal.writeLine(line));
           await prepareS31Rom(esploader, transport, (line) => terminal.writeLine(line));
-          terminal.writeLine("[S31] ROM 无 stub 模式：固定 115200 波特率，写入较慢（数分钟），期间请勿断开设备。");
+          terminal.writeLine(`[S31] ROM 无 stub 模式 @ ${activeBaud} 波特率，写入期间请勿断开设备。`);
           if (offset === 0x10000) terminal.writeLine("[S31] 提示：Metalio 应用分区是 0x80000，不是 0x10000；请确认地址。");
         } else {
           // 与 main() 等价的收尾：补齐芯片信息、上传 stub 并切换波特率，不再重复握手。
